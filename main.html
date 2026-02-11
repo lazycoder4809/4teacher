@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plants vs Zombies - Simple Version</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Arial,sans-serif;background:linear-gradient(to bottom,#87CEEB 0%,#98D8C8 100%);overflow:hidden}
+#game-container{width:900px;margin:20px auto;position:relative}
+#top-bar{background:rgba(101,67,33,.9);padding:15px;border-radius:10px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+#sun-counter{color:#FFD700;font-size:24px;font-weight:bold;display:flex;align-items:center;gap:10px}
+.sun-icon{width:30px;height:30px;background:radial-gradient(circle,#FFD700,#FFA500);border-radius:50%;box-shadow:0 0 10px #FFD700}
+#plant-shop{display:flex;gap:10px}
+.plant-card{width:70px;height:80px;background:rgba(34,139,34,.8);border:3px solid #228B22;border-radius:8px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:.2s}
+.plant-card:hover:not(.disabled){transform:scale(1.1);border-color:#32CD32}
+.plant-card.selected{border-color:#FFD700;box-shadow:0 0 10px #FFD700}
+.plant-card.disabled{opacity:.5;cursor:not-allowed}
+.plant-emoji{font-size:32px}
+.plant-cost{color:#FFD700;font-size:14px;font-weight:bold}
+#game-board{width:900px;height:500px;background:linear-gradient(to right,#8B7355 0%,#6B5344 100%);border:5px solid #654321;border-radius:10px;position:relative;overflow:hidden}
+.grid-cell{width:100px;height:100px;border:1px solid rgba(139,69,19,.3);position:absolute;cursor:pointer}
+.plant,.zombie{width:60px;height:60px;position:absolute;display:flex;align-items:center;justify-content:center;font-size:48px}
+.projectile{width:20px;height:20px;background:#90EE90;border-radius:50%;position:absolute}
+.sun{width:40px;height:40px;background:radial-gradient(circle,#FFD700,#FFA500);border-radius:50%;position:absolute;cursor:pointer;box-shadow:0 0 15px #FFD700}
+#game-over{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.9);color:#FF4500;padding:40px 60px;border-radius:20px;font-size:48px;font-weight:bold;display:none;z-index:100;text-align:center}
+#game-over button{margin-top:20px;padding:15px 30px;font-size:24px;background:#228B22;color:#fff;border:none;border-radius:10px;cursor:pointer}
+.health-bar{position:absolute;top:-8px;left:50%;transform:translateX(-50%);width:50px;height:6px;background:#333;border-radius:3px}
+.health-fill{height:100%;background:#00FF00;border-radius:3px}
+</style>
+</head>
+
+<body>
+<div id="game-container">
+<div id="top-bar">
+<div id="sun-counter"><div class="sun-icon"></div><span id="sun-amount">50</span></div>
+<div id="plant-shop">
+<div class="plant-card" data-type="sunflower" data-cost="50"><div class="plant-emoji">🌻</div><div class="plant-cost">50</div></div>
+<div class="plant-card" data-type="peashooter" data-cost="100"><div class="plant-emoji">🌿</div><div class="plant-cost">100</div></div>
+<div class="plant-card" data-type="wallnut" data-cost="75"><div class="plant-emoji">🪵</div><div class="plant-cost">75</div></div>
+</div>
+</div>
+
+<div id="game-board"></div>
+
+<div id="game-over">
+<div>GAME OVER!</div>
+<div style="font-size: 24px; margin-top: 10px;">The zombies ate your brains!</div>
+<button onclick="location.reload()">Play Again</button>
+</div>
+</div>
+
+<script>
+let difficultyLevel = 1;
+let zombieSpawnInterval = 8000;
+let zombieSpeedMultiplier = 1;
+let gameTime = 0;
+let sunCount = 50;
+let selectedPlant = null;
+let gameActive = true;
+let zombieSpawner = null;
+
+const ROWS = 5;
+const COLS = 9;
+const CELL_SIZE = 100;
+const plants = [];
+const zombies = [];
+const projectiles = [];
+const suns = [];
+const gameBoard = document.getElementById("game-board");
+
+for(let r = 0; r < ROWS; r++) {
+    for(let c = 0; c < COLS; c++) {
+        const cell = document.createElement("div");
+        cell.className = "grid-cell";
+        cell.style.left = c * CELL_SIZE + "px";
+        cell.style.top = r * CELL_SIZE + "px";
+        cell.dataset.row = r;
+        cell.dataset.col = c;
+        cell.onclick = plantOnCell;
+        gameBoard.appendChild(cell);
+    }
+}
+
+document.querySelectorAll(".plant-card").forEach(card => {
+    card.onclick = () => {
+        const cost = +card.dataset.cost;
+        if(sunCount >= cost) {
+            document.querySelectorAll(".plant-card").forEach(c => c.classList.remove("selected"));
+            card.classList.add("selected");
+            selectedPlant = {type: card.dataset.type, cost};
+        }
+    };
+});
+
+function plantOnCell(e) {
+    if(!selectedPlant || !gameActive) return;
+    const r = +e.target.dataset.row;
+    const c = +e.target.dataset.col;
+    if(plants.some(p => p.row === r && p.col === c)) return;
+    if(sunCount < selectedPlant.cost) return;
+    
+    sunCount -= selectedPlant.cost;
+    updateSunDisplay();
+    
+    const hp = selectedPlant.type === "wallnut" ? 300 : 100;
+    const plant = {
+        type: selectedPlant.type,
+        row: r,
+        col: c,
+        x: c * CELL_SIZE + 20,
+        y: r * CELL_SIZE + 20,
+        health: hp,
+        maxHealth: hp,
+        element: createPlant(selectedPlant.type, c * CELL_SIZE + 20, r * CELL_SIZE + 20)
+    };
+    plants.push(plant);
+    
+    if(plant.type === "sunflower") {
+        const sunInterval = setInterval(() => {
+            if(!gameActive || !plants.includes(plant)) {
+                clearInterval(sunInterval);
+                return;
+            }
+            spawnSun(plant);
+        }, 5000);
+    }
+    if(plant.type === "peashooter") {
+        const shootInterval = setInterval(() => {
+            if(!gameActive || !plants.includes(plant)) {
+                clearInterval(shootInterval);
+                return;
+            }
+            shoot(plant);
+        }, 1500);
+    }
+}
+
+function createPlant(type, x, y) {
+    const el = document.createElement("div");
+    el.className = "plant";
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    el.textContent = type === "sunflower" ? "🌻" : type === "peashooter" ? "🌿" : "🪵";
+    el.innerHTML += `<div class="health-bar"><div class="health-fill"></div></div>`;
+    gameBoard.appendChild(el);
+    return el;
+}
+
+function spawnSun(p) {
+    const el = document.createElement("div");
+    el.className = "sun";
+    el.style.left = p.x + 20 + "px";
+    el.style.top = p.y + "px";
+    el.onclick = () => {
+        sunCount += 50;
+        updateSunDisplay();
+        el.remove();
+    };
+    gameBoard.appendChild(el);
+}
+
+function shoot(p) {
+    if(!gameActive || !plants.includes(p)) return;
+    if(!zombies.some(z => z.row === p.row && z.x > p.x)) return;
+    
+    const el = document.createElement("div");
+    el.className = "projectile";
+    el.style.left = p.x + 40 + "px";
+    el.style.top = p.y + 20 + "px";
+    gameBoard.appendChild(el);
+    projectiles.push({x: p.x + 40, y: p.y + 20, row: p.row, element: el});
+}
+
+function spawnZombie() {
+    if(!gameActive) return;
+    const r = Math.floor(Math.random() * ROWS);
+    const el = document.createElement("div");
+    el.className = "zombie";
+    el.textContent = "🧟";
+    el.style.left = "900px";
+    el.style.top = r * CELL_SIZE + 20 + "px";
+    el.innerHTML += `<div class="health-bar"><div class="health-fill"></div></div>`;
+    gameBoard.appendChild(el);
+    zombies.push({
+        row: r,
+        x: 900,
+        y: r * CELL_SIZE + 20,
+        health: 100,
+        maxHealth: 100,
+        speed: (0.2 + Math.random() * 0.1) * zombieSpeedMultiplier,
+        element: el
+    });
+}
+
+function increaseDifficulty() {
+    difficultyLevel++;
+    zombieSpawnInterval = Math.max(3000, zombieSpawnInterval - 1000);
+    zombieSpeedMultiplier += 0.15;
+    
+    if(zombieSpawner) {
+        clearInterval(zombieSpawner);
+    }
+    zombieSpawner = setInterval(spawnZombie, zombieSpawnInterval);
+    
+    console.log("Difficulty Level:", difficultyLevel, "Spawn Interval:", zombieSpawnInterval);
+}
+
+function updateSunDisplay() {
+    document.getElementById("sun-amount").textContent = sunCount;
+    document.querySelectorAll(".plant-card").forEach(c => {
+        c.classList.toggle("disabled", sunCount < +c.dataset.cost);
+    });
+}
+
+function gameLoop() {
+    if(!gameActive) return;
+    
+    
+    for(let zi = zombies.length - 1; zi >= 0; zi--) {
+        const z = zombies[zi];
+        z.x -= z.speed;
+        z.element.style.left = z.x + "px";
+        
+        if(z.x < 0) {
+            gameActive = false;
+            document.getElementById("game-over").style.display = "block";
+            return;
+        }
+        
+        for(let pi = plants.length - 1; pi >= 0; pi--) {
+            const p = plants[pi];
+            if(z.row === p.row && Math.abs(z.x - p.x) < 40) {
+                p.health -= 0.3;
+                const healthPercent = (p.health / p.maxHealth) * 100;
+                p.element.querySelector(".health-fill").style.width = healthPercent + "%";
+                if(p.health <= 0) {
+                    p.element.remove();
+                    plants.splice(pi, 1);
+                }
+            }
+        }
+    }
+    
+    
+    for(let pi = projectiles.length - 1; pi >= 0; pi--) {
+        const p = projectiles[pi];
+        p.x += 3;
+        p.element.style.left = p.x + "px";
+        
+        if(p.x > 900) {
+            p.element.remove();
+            projectiles.splice(pi, 1);
+            continue;
+        }
+        
+        for(let zi = zombies.length - 1; zi >= 0; zi--) {
+            const z = zombies[zi];
+            if(z.row === p.row && Math.abs(z.x - p.x) < 30) {
+                z.health -= 25;
+                const healthPercent = (z.health / z.maxHealth) * 100;
+                z.element.querySelector(".health-fill").style.width = healthPercent + "%";
+                p.element.remove();
+                projectiles.splice(pi, 1);
+                
+                if(z.health <= 0) {
+                    z.element.remove();
+                    zombies.splice(zi, 1);
+                }
+                break;
+            }
+        }
+    }
+    
+    requestAnimationFrame(gameLoop);
+}
+
+
+zombieSpawner = setInterval(spawnZombie, zombieSpawnInterval);
+
+
+
+setInterval(() => {
+    if(!gameActive) return;
+    increaseDifficulty();
+}, 30000);
+
+
+updateSunDisplay();
+gameLoop();
+</script>
+</body>
+</html>
